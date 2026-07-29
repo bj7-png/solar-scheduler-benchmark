@@ -1,0 +1,41 @@
+# AI Use Statement
+
+## Declaration
+
+I declare that I used generative AI tools (ChatGPT and Claude) to assist with organising the expanded evidence base, drafting and formatting sections of the proposal and documentation, and structuring the risk register, RACI matrix, Gantt chart and work breakdown structure.
+
+## Specific Uses
+
+| Tool | Purpose | Sample Prompt |
+|------|---------|---------------|
+| ChatGPT | Evidence organisation | "Summarise the gap between simulated and real-world reinforcement learning scheduling results across these sources" |
+| ChatGPT | Document structure | "Draft a work breakdown structure aligned to five two-week Agile sprints decomposed to three levels" |
+| Claude | Ethics refinement | "Refine the ethical dilemma section to name specific frameworks rather than generic principles" |
+| ChatGPT | Code skeleton | "Generate a Python class structure for a solar forecasting pipeline using scikit-learn" |
+| Claude | README drafting | "Draft a professional README for a GitHub repo following this structure: problem, evidence, solution, tech stack, setup, plan, ethics, sustainability" |
+
+## Verification Process
+
+All AI-assisted drafting was:
+1. Checked against the Assessment 1 evidence base and concept matrix
+2. Edited by me to ensure accuracy, correct attribution and alignment with the assessment brief
+3. Cross-referenced against primary sources (citations verified in Google Scholar / library database)
+4. Reviewed for consistency with the project scope and risk decisions
+
+## What AI Did NOT Do
+
+No AI tool was used to:
+- Generate underlying evidence review findings
+- Make gap analysis judgements
+- Decide project scope, risk appetite or methodology choice
+- Produce the final evaluation or benchmark results (these do not yet exist)
+
+These remain my own professional judgement as the technical lead.
+
+## Responsibility
+
+I take full responsibility for the accuracy, integrity and academic honesty of this submission and all repository contents.
+
+---
+
+**Student:** Bijay Shrestha | **Date:** 2026-07-28
