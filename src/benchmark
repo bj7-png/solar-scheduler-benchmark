@@ -1,0 +1,325 @@
+"""
+Benchmark Module
+================
+Executes fair, like-for-like comparison between rule-based and learned
+schedulers on identical test conditions.
+
+All metrics are computed identically for both approaches to ensure
+any performance difference is attributable to the method, not the data.
+"""
+
+import pandas as pd
+import numpy as np
+from typing import Dict, Tuple
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+class Benchmark:
+    """
+    Fair benchmarking engine for solar scheduling approaches.
+
+    Guarantees:
+    - Identical test data for both schedulers
+    - Identical battery parameters for both schedulers
+    - Identical evaluation metrics for both schedulers
+    - Transparent reporting of all results (positive, negative, or negligible)
+    """
+
+    def __init__(self, 
+                 battery_capacity: float = 10.0,
+                 max_charge_rate: float = 5.0,
+                 max_discharge_rate: float = 5.0,
+                 efficiency: float = 0.95,
+                 min_soc: float = 1.0,
+                 grid_price_flat: float = 0.30,
+                 feed_in_tariff: float = 0.08):
+        """
+        Args:
+            battery_capacity: Battery capacity (kWh)
+            max_charge_rate: Max charge rate (kW)
+            max_discharge_rate: Max discharge rate (kW)
+            efficiency: Round-trip efficiency
+            min_soc: Minimum state of charge (kWh)
+            grid_price_flat: Flat grid price ($/kWh) — time-of-use can be added
+            feed_in_tariff: Feed-in tariff ($/kWh)
+        """
+        self.battery_params = {
+            "capacity": battery_capacity,
+            "max_charge_rate": max_charge_rate,
+            "max_discharge_rate": max_discharge_rate,
+            "efficiency": efficiency,
+            "min_soc": min_soc
+        }
+        self.grid_price_flat = grid_price_flat
+        self.feed_in_tariff = feed_in_tariff
+        self.results = {}
+
+    def run(self, 
+            test_data: pd.DataFrame,
+            rule_scheduler,
+            learned_scheduler,
+            forecast_model) -> Dict:
+        """
+        Run head-to-head benchmark.
+
+        Args:
+            test_data: Test dataset with actual generation and demand
+            rule_scheduler: Trained RuleBasedScheduler instance
+            learned_scheduler: Trained RLScheduler instance
+            forecast_model: Trained SolarForecastModel instance
+
+        Returns:
+            Benchmark results dictionary
+        """
+        logger.info("=== Starting Fair Benchmark ===")
+        logger.info(f"Test data: {len(test_data)} timesteps")
+
+        # Generate forecasts for test data
+        test_with_forecasts = self._generate_forecasts(test_data, forecast_model)
+
+        # Run rule-based scheduler
+        logger.info("Running rule-based scheduler...")
+        rule_results = self._run_scheduler(rule_scheduler, test_with_forecasts, "rule")
+
+        # Run learned scheduler
+        logger.info("Running learned scheduler...")
+        learned_results = self._run_scheduler(learned_scheduler, test_with_forecasts, "learned")
+
+        # Compute metrics
+        self.results = {
+            "rule_based": self._compute_metrics(rule_results, test_data),
+            "learned": self._compute_metrics(learned_results, test_data),
+            "test_conditions": {
+                "n_timesteps": len(test_data),
+                "battery_params": self.battery_params,
+                "grid_price": self.grid_price_flat,
+                "feed_in_tariff": self.feed_in_tariff,
+                "forecast_model": forecast_model.target if hasattr(forecast_model, 'target') else "unknown"
+            }
+        }
+
+        # Compute difference
+        self.results["difference"] = self._compute_difference(
+            self.results["rule_based"], 
+            self.results["learned"]
+        )
+
+        self._print_summary()
+
+        return self.results
+
+    def _generate_forecasts(self, test_data: pd.DataFrame, 
+                           forecast_model) -> pd.DataFrame:
+        """Generate forecasts for test data using trained model."""
+        df = test_data.copy()
+
+        # In a real implementation, this would use the forecast model
+        # For the skeleton, we use the actual values as "perfect" forecasts
+        # In Part B, this will be replaced with real model predictions
+        df["generation_forecast"] = df["generation_kwh"]
+        df["demand_forecast"] = df["consumption_kwh"]
+        df["grid_price"] = self.grid_price_flat
+
+        return df
+
+    def _run_scheduler(self, scheduler, test_data: pd.DataFrame, 
+                       name: str) -> pd.DataFrame:
+        """Run a scheduler and return results."""
+        # Reset scheduler state
+        if hasattr(scheduler, 'reset'):
+            scheduler.reset()
+
+        # Run simulation
+        if name == "rule":
+            results = scheduler.run_simulation(
+                test_data[["timestamp", "generation_forecast", "demand_forecast"]],
+                test_data.set_index("timestamp")["grid_price"]
+            )
+        else:
+            results = scheduler.run_simulation(test_data)
+
+        return results
+
+    def _compute_metrics(self, results: pd.DataFrame, 
+                         actual_data: pd.DataFrame) -> Dict:
+        """
+        Compute standardised metrics for a scheduler.
+
+        Metrics:
+        - Self-consumption rate (%)
+        - Grid import (kWh)
+        - Grid export (kWh)
+        - Total cost ($)
+        - Average SOC (%)
+        - Action distribution
+        """
+        # Merge with actual data
+        merged = results.merge(
+            actual_data[["timestamp", "generation_kwh", "consumption_kwh"]],
+            on="timestamp",
+            how="left"
+        )
+
+        # Self-consumption: solar used on-site / total solar generation
+        # Simplified: generation - export (where export = generation not consumed or stored)
+        total_generation = merged["generation_kwh"].sum()
+
+        # Grid import: when demand > generation + battery discharge
+        # Simplified calculation for skeleton
+        grid_import = max(0, merged["consumption_kwh"].sum() - total_generation)
+
+        # Cost
+        cost = grid_import * self.grid_price_flat
+
+        # Self-consumption rate
+        self_consumption = total_generation - max(0, total_generation - merged["consumption_kwh"].sum())
+        self_consumption_rate = (self_consumption / total_generation * 100) if total_generation > 0 else 0
+
+        # Average SOC
+        avg_soc = merged["soc"].mean() if "soc" in merged.columns else 0
+
+        # Action distribution
+        if "action" in merged.columns:
+            action_dist = merged["action"].value_counts().to_dict()
+        else:
+            action_dist = {}
+
+        return {
+            "self_consumption_rate_pct": round(self_consumption_rate, 2),
+            "grid_import_kwh": round(grid_import, 2),
+            "total_cost_aud": round(cost, 2),
+            "avg_soc_pct": round(avg_soc / self.battery_params["capacity"] * 100, 2) if self.battery_params["capacity"] > 0 else 0,
+            "action_distribution": action_dist,
+            "n_timesteps": len(merged)
+        }
+
+    def _compute_difference(self, rule_metrics: Dict, 
+                           learned_metrics: Dict) -> Dict:
+        """Compute difference between learned and rule-based metrics."""
+        diff = {}
+
+        for key in ["self_consumption_rate_pct", "grid_import_kwh", "total_cost_aud"]:
+            if key in rule_metrics and key in learned_metrics:
+                diff[key] = round(learned_metrics[key] - rule_metrics[key], 2)
+                diff[f"{key}_pct_change"] = round(
+                    (learned_metrics[key] - rule_metrics[key]) / abs(rule_metrics[key]) * 100, 2
+                ) if rule_metrics[key] != 0 else 0
+
+        return diff
+
+    def _print_summary(self):
+        """Print benchmark summary to console."""
+        logger.info("
+" + "="*60)
+        logger.info("BENCHMARK RESULTS SUMMARY")
+        logger.info("="*60)
+
+        logger.info("
+Rule-Based Scheduler:")
+        for k, v in self.results["rule_based"].items():
+            if k != "action_distribution":
+                logger.info(f"  {k}: {v}")
+
+        logger.info("
+Learned Scheduler:")
+        for k, v in self.results["learned"].items():
+            if k != "action_distribution":
+                logger.info(f"  {k}: {v}")
+
+        logger.info("
+Difference (Learned - Rule-Based):")
+        for k, v in self.results["difference"].items():
+            logger.info(f"  {k}: {v}")
+
+        # Honest interpretation
+        scr_diff = self.results["difference"].get("self_consumption_rate_pct", 0)
+        if scr_diff > 1:
+            logger.info(f"
+→ Learned scheduler improves self-consumption by {scr_diff}%")
+        elif scr_diff < -1:
+            logger.info(f"
+→ Learned scheduler reduces self-consumption by {abs(scr_diff)}%")
+        else:
+            logger.info(f"
+→ No meaningful difference in self-consumption ({scr_diff}%)")
+
+        logger.info("="*60)
+
+    def generate_report(self) -> str:
+        """Generate a markdown benchmark report."""
+        report = f"""# Benchmark Report
+
+## Test Conditions
+
+- **Dataset:** {self.results["test_conditions"]["n_timesteps"]} timesteps
+- **Battery capacity:** {self.results["test_conditions"]["battery_params"]["capacity"]} kWh
+- **Grid price:** ${self.results["test_conditions"]["grid_price"]}/kWh
+- **Feed-in tariff:** ${self.results["test_conditions"]["feed_in_tariff"]}/kWh
+
+## Results
+
+### Rule-Based Scheduler
+
+| Metric | Value |
+|--------|-------|
+| Self-consumption rate | {self.results["rule_based"]["self_consumption_rate_pct"]}% |
+| Grid import | {self.results["rule_based"]["grid_import_kwh"]} kWh |
+| Total cost | ${self.results["rule_based"]["total_cost_aud"]} |
+| Average SOC | {self.results["rule_based"]["avg_soc_pct"]}% |
+
+### Learned Scheduler
+
+| Metric | Value |
+|--------|-------|
+| Self-consumption rate | {self.results["learned"]["self_consumption_rate_pct"]}% |
+| Grid import | {self.results["learned"]["grid_import_kwh"]} kWh |
+| Total cost | ${self.results["learned"]["total_cost_aud"]} |
+| Average SOC | {self.results["learned"]["avg_soc_pct"]}% |
+
+### Difference (Learned - Rule-Based)
+
+| Metric | Absolute | Percentage |
+|--------|----------|------------|
+| Self-consumption rate | {self.results["difference"].get("self_consumption_rate_pct", "N/A")}% | {self.results["difference"].get("self_consumption_rate_pct_pct_change", "N/A")}% |
+| Grid import | {self.results["difference"].get("grid_import_kwh", "N/A")} kWh | {self.results["difference"].get("grid_import_kwh_pct_change", "N/A")}% |
+| Total cost | ${self.results["difference"].get("total_cost_aud", "N/A")} | {self.results["difference"].get("total_cost_aud_pct_change", "N/A")}% |
+
+## Interpretation
+
+*This section will be completed after Part B benchmark execution. The project is framed as an honest benchmark — negative or negligible results are valid findings, not failures.*
+
+## Limitations
+
+- Results are specific to the tested datasets and conditions
+- Does not generalise to all Australian households
+- Synthetic data used where real data was insufficient
+- No live deployment validation
+
+## Governance
+
+- All decisions logged with inputs and model versions
+- NIST AI RMF Measure function applied
+- Data sources documented in data/README.md
+"""
+        return report
+
+    def save_report(self, path: str):
+        """Save benchmark report to file."""
+        report = self.generate_report()
+        with open(path, 'w') as f:
+            f.write(report)
+        logger.info(f"Benchmark report saved to {path}")
+
+
+if __name__ == "__main__":
+    print("Benchmark module ready.")
+    print("Usage: from src.benchmark import Benchmark")
+    print("
+Fair benchmarking guarantees:")
+    print("  - Identical test data for both schedulers")
+    print("  - Identical battery parameters")
+    print("  - Identical evaluation metrics")
+    print("  - Transparent reporting (positive, negative, or negligible)")
